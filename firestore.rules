@@ -1,0 +1,207 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // Collection: users
+    //   - name: string
+    //   - email: string
+    //   - role: string ('admin', 'cashier', 'pharmacist')
+    //   - createdAt: string
+    //
+    // Collection: medicines
+    //   - name: string
+    //   - price: number
+    //   - costPrice: number
+    //   - stock: number
+    //   - expiryDate: string
+    //   - batchNo: string
+    //   - supplierId: string (optional)
+    //   - createdAt: string
+    //
+    // Collection: sales
+    //   - items: list
+    //   - subtotal: number
+    //   - discount: number
+    //   - total: number
+    //   - date: string
+    //   - customerId: string (optional)
+    //   - cashierId: string
+    //
+    // Collection: customers
+    //   - name: string
+    //   - phone: string
+    //   - creditBalance: number
+    //   - createdAt: string
+    //
+    // Collection: suppliers
+    //   - name: string
+    //   - contact: string
+    //   - address: string (optional)
+    //   - createdAt: string
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'admin') ||
+        (request.auth.token.email == "aleemfarrukh13@gmail.com" && request.auth.token.email_verified == true) ||
+        (request.auth.token.email == "admin@gmhpharmacy.com")
+      );
+    }
+
+    function isPharmacist() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'pharmacist';
+    }
+
+    function isCashier() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'cashier';
+    }
+
+    function hasRole(roles) {
+      return isAuthenticated() && (
+        isAdmin() || 
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role in roles)
+      );
+    }
+
+    function isValidString(val, min, max) {
+      return val is string && val.size() >= min && val.size() <= max;
+    }
+
+    function isValidNumber(val, min) {
+      return val is number && val >= min;
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.size() >= 10; // Basic ISO check
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUser(data) {
+      return data.keys().hasAll(['name', 'email', 'role', 'createdAt']) &&
+             isValidString(data.name, 1, 100) &&
+             isValidString(data.email, 5, 100) &&
+             data.role in ['admin', 'cashier', 'pharmacist'] &&
+             isValidDateString(data.createdAt);
+    }
+
+    function isValidMedicine(data) {
+      return data.keys().hasAll(['name', 'stock', 'expiryDate', 'batchNo', 'createdAt']) &&
+             isValidString(data.name, 1, 200) &&
+             isValidNumber(data.stock, 0) &&
+             isValidString(data.expiryDate, 5, 50) &&
+             isValidString(data.batchNo, 1, 100) &&
+             isValidDateString(data.createdAt);
+    }
+
+    function isValidSale(data) {
+      return data.keys().hasAll(['items', 'subtotal', 'discount', 'total', 'date', 'cashierId', 'customerType']) &&
+             data.items is list &&
+             data.items.size() > 0 && data.items.size() <= 100 &&
+             isValidNumber(data.subtotal, 0) &&
+             isValidNumber(data.discount, 0) &&
+             isValidNumber(data.total, 0) &&
+             isValidDateString(data.date) &&
+             data.customerType in ['customer', 'hospital'] &&
+             data.cashierId == request.auth.uid;
+    }
+
+    function isValidCustomer(data) {
+      return data.keys().hasAll(['name', 'phone', 'creditBalance', 'createdAt']) &&
+             isValidString(data.name, 1, 100) &&
+             isValidString(data.phone, 5, 20) &&
+             isValidNumber(data.creditBalance, 0) &&
+             isValidDateString(data.createdAt);
+    }
+
+    function isValidSupplier(data) {
+      return data.keys().hasAll(['name', 'contact', 'createdAt']) &&
+             isValidString(data.name, 1, 100) &&
+             isValidString(data.contact, 5, 100) &&
+             isValidDateString(data.createdAt);
+    }
+
+    function isValidExpense(data) {
+      return data.keys().hasAll(['description', 'amount', 'category', 'date', 'addedBy', 'createdAt']) &&
+             isValidString(data.description, 1, 200) &&
+             isValidNumber(data.amount, 0) &&
+             isValidString(data.category, 1, 50) &&
+             isValidDateString(data.date) &&
+             isValidString(data.addedBy, 1, 100) &&
+             isValidDateString(data.createdAt);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      // Only admins can create/update users. Users can't escalate privileges.
+      allow create: if isAdmin() && isValidUser(request.resource.data);
+      allow update: if isAdmin() && isValidUser(request.resource.data) && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isAdmin();
+    }
+
+    match /medicines/{medicineId} {
+      // Anyone logged in can read medicines (cashiers need it for billing)
+      allow read: if isAuthenticated();
+      // Admins and Pharmacists can manage medicines
+      allow create: if hasRole(['pharmacist']) && isValidMedicine(request.resource.data);
+      allow update: if hasRole(['pharmacist']) && isValidMedicine(request.resource.data) && request.resource.data.createdAt == resource.data.createdAt;
+      // Cashiers can only update stock when making a sale
+      // This is a simplified check. In a real app, we'd use a transaction and verify the stock reduction matches the sale.
+      // For this prototype, we allow cashiers to update medicines but only the stock field ideally.
+      // To prevent bypass, we ensure they don't change other fields.
+      allow update: if isCashier() && 
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock']) &&
+                    isValidNumber(request.resource.data.stock, 0);
+      allow delete: if isAdmin();
+    }
+
+    match /sales/{saleId} {
+      // All staff can read sales (for reports/history)
+      allow read: if isAuthenticated();
+      // Cashiers and Admins can create sales
+      allow create: if hasRole(['cashier']) && isValidSale(request.resource.data);
+      // Sales are immutable once created
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    match /customers/{customerId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidCustomer(request.resource.data);
+      allow update: if isAuthenticated() && isValidCustomer(request.resource.data) && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isAdmin();
+    }
+
+    match /suppliers/{supplierId} {
+      allow read: if isAuthenticated();
+      allow create: if hasRole(['pharmacist']) && isValidSupplier(request.resource.data);
+      allow update: if hasRole(['pharmacist']) && isValidSupplier(request.resource.data) && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isAdmin();
+    }
+
+    match /expenses/{expenseId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() && isValidExpense(request.resource.data);
+      allow update: if isAdmin() && isValidExpense(request.resource.data) && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isAdmin();
+    }
+  }
+}
