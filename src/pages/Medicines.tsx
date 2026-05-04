@@ -14,6 +14,8 @@ export function Medicines() {
   const [csvError, setCsvError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState('');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   
   const [formData, setFormData] = useState({
     name: '',
@@ -105,12 +107,17 @@ export function Medicines() {
   };
 
   const handleDelete = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this medicine?')) {
-      try {
-        await deleteDoc(doc(db, 'medicines', id));
-      } catch (error) {
-        handleFirestoreError(error, OperationType.DELETE, `medicines/${id}`);
-      }
+    setConfirmDeleteId(id);
+  };
+
+  const confirmDelete = async () => {
+    if (!confirmDeleteId) return;
+    try {
+      await deleteDoc(doc(db, 'medicines', confirmDeleteId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `medicines/${confirmDeleteId}`);
+    } finally {
+      setConfirmDeleteId(null);
     }
   };
 
@@ -180,7 +187,8 @@ export function Medicines() {
           }
 
           setIsCsvModalOpen(false);
-          alert(`Successfully imported ${successCount} medicines!`);
+          setSuccessMsg(`✓ Successfully imported ${successCount} medicines!`);
+          setTimeout(() => setSuccessMsg(''), 4000);
         } catch (error) {
           console.error("CSV Import Error:", error);
           setCsvError("An error occurred while importing data. Please check the console.");
@@ -208,6 +216,27 @@ export function Medicines() {
 
   return (
     <div className="space-y-6">
+      {/* Success Toast */}
+      {successMsg && (
+        <div className="fixed top-4 right-4 bg-green-600 text-white px-5 py-3 rounded-lg shadow-lg z-50 flex items-center gap-2">
+          {successMsg}
+        </div>
+      )}
+
+      {/* Confirm Delete Modal */}
+      {confirmDeleteId && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full mx-4">
+            <h3 className="text-lg font-bold text-gray-900 mb-2">Delete Medicine</h3>
+            <p className="text-gray-600 mb-6">Are you sure you want to delete this medicine? This action cannot be undone.</p>
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setConfirmDeleteId(null)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Cancel</button>
+              <button onClick={confirmDelete} className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold text-gray-900">Medicines Inventory</h1>
         <div className="flex gap-3">

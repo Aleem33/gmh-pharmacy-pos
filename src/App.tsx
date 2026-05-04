@@ -24,6 +24,16 @@ import { PurchaseReturns } from './pages/PurchaseReturns';
 export default function App() {
   const [user, setUser]         = useState<any>(undefined);
   const [userRole, setUserRole] = useState<string | null>(null);
+  const [mainError, setMainError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const api = (window as any).electronAPI;
+    if (!api?.onMainError) return;
+    api.onMainError((err: { message: string }) => {
+      setMainError(err.message || 'An unexpected error occurred.');
+    });
+    return () => api.removeAllUpdateListeners?.();
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -82,6 +92,21 @@ export default function App() {
 
   return (
     <ErrorBoundary>
+      {mainError && (
+        <div className="fixed top-0 left-0 right-0 z-[9999] bg-red-600 text-white px-4 py-3 flex items-center justify-between shadow-lg">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+            </svg>
+            <span>Application error: {mainError}</span>
+          </div>
+          <button
+            onClick={() => setMainError(null)}
+            className="ml-4 text-white/80 hover:text-white text-lg leading-none"
+            aria-label="Dismiss"
+          >✕</button>
+        </div>
+      )}
       <UpdateNotification />
       <HashRouter>
         <Routes>

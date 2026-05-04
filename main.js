@@ -2,6 +2,27 @@ const { app, BrowserWindow, Menu, ipcMain } = require('electron');
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
 
+// ─── Prevent Electron's native error dialog from opening and hanging the app ─
+// Route all unhandled main-process errors to the renderer's built-in error UI.
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception in main process:', err);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('main-process-error', {
+      message: err.message || String(err),
+      stack: err.stack || '',
+    });
+  }
+});
+
+process.on('unhandledRejection', (reason) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  const stack   = reason instanceof Error ? (reason.stack || '') : '';
+  console.error('Unhandled rejection in main process:', reason);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('main-process-error', { message, stack });
+  }
+});
+
 // ─── Auto-updater configuration ────────────────────────────────────────────
 autoUpdater.autoDownload = true;         // Download silently in background
 autoUpdater.autoInstallOnAppQuit = true; // Auto-install when user quits normally

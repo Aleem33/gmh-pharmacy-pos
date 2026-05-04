@@ -11,6 +11,8 @@ export function Users() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [infoMsg, setInfoMsg] = useState('');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   
   const [formData, setFormData] = useState({
     username: '',
@@ -51,7 +53,8 @@ export function Users() {
           }
         } else if (formData.password || (formData.email && formData.email !== users.find(u => u.id === editingId)?.email)) {
           // Cannot update other users' auth credentials from client SDK
-          alert("Note: Firestore profile updated. However, changing the login Email or Password for OTHER users requires them to do it themselves, or an admin must use the Firebase Console.");
+          setInfoMsg("Note: Firestore profile updated. However, changing the login Email or Password for OTHER users requires them to do it themselves, or an admin must use the Firebase Console.");
+          setTimeout(() => setInfoMsg(''), 6000);
         }
 
         setIsModalOpen(false);
@@ -104,17 +107,44 @@ export function Users() {
   };
 
   const handleDelete = async (id: string) => {
-    if (window.confirm('Are you sure you want to delete this user? Note: This only removes their access role. Their auth account must be deleted in Firebase Console.')) {
-      try {
-        await deleteDoc(doc(db, 'users', id));
-      } catch (error) {
-        handleFirestoreError(error, OperationType.DELETE, `users/${id}`);
-      }
+    setConfirmDeleteId(id);
+  };
+
+  const confirmDelete = async () => {
+    if (!confirmDeleteId) return;
+    try {
+      await deleteDoc(doc(db, 'users', confirmDeleteId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `users/${confirmDeleteId}`);
+    } finally {
+      setConfirmDeleteId(null);
     }
   };
 
   return (
     <div className="space-y-6">
+      {/* Info Toast */}
+      {infoMsg && (
+        <div className="fixed top-4 right-4 bg-blue-600 text-white px-5 py-3 rounded-lg shadow-lg z-50 max-w-sm text-sm">
+          {infoMsg}
+        </div>
+      )}
+
+      {/* Confirm Delete Modal */}
+      {confirmDeleteId && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full mx-4">
+            <h3 className="text-lg font-bold text-gray-900 mb-2">Delete User</h3>
+            <p className="text-gray-600 mb-1">Are you sure you want to delete this user?</p>
+            <p className="text-sm text-amber-700 bg-amber-50 rounded p-2 mb-6">Note: This only removes their access role. Their auth account must be deleted in Firebase Console.</p>
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setConfirmDeleteId(null)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50">Cancel</button>
+              <button onClick={confirmDelete} className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
         <button

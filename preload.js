@@ -11,6 +11,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   installUpdate: () => ipcRenderer.send('install-update'),
   checkForUpdates: () => ipcRenderer.send('check-for-updates'),
 
+  // Main-process error (replaces Electron's native hang-prone error dialog)
+  onMainError: (callback) => ipcRenderer.on('main-process-error', (_event, err) => callback(err)),
+
   // Cleanup listeners
   removeAllUpdateListeners: () => {
     ipcRenderer.removeAllListeners('update-available');
@@ -18,5 +21,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('update-error');
     ipcRenderer.removeAllListeners('download-progress');
     ipcRenderer.removeAllListeners('update-not-available');
+    ipcRenderer.removeAllListeners('main-process-error');
   },
 });
