@@ -22,34 +22,40 @@ import { SalesReturns } from './pages/SalesReturns';
 import { PurchaseReturns } from './pages/PurchaseReturns';
 
 export default function App() {
-  const [user, setUser] = useState<any>(undefined);
+  const [user, setUser]         = useState<any>(undefined);
   const [userRole, setUserRole] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
-        // Bootstrap user in Firestore if they don't exist
         try {
-          const userRef = doc(db, 'users', currentUser.uid);
+          const userRef  = doc(db, 'users', currentUser.uid);
           const userSnap = await getDoc(userRef);
-          
+
           if (!userSnap.exists()) {
-            // First user gets admin, others get cashier by default (for demo purposes)
-            // In a real app, you'd have a more robust bootstrapping process
-            const role = (currentUser.email === 'aleemfarrukh13@gmail.com' || currentUser.email === 'admin@gmhpharmacy.com') ? 'admin' : 'cashier';
-            
+            // New user — assign role based on email, default cashier
+            const role =
+              currentUser.email === 'aleemfarrukh13@gmail.com' ||
+              currentUser.email === 'admin@gmhpharmacy.com'
+                ? 'admin'
+                : 'cashier';
+
             await setDoc(userRef, {
-              name: currentUser.displayName || currentUser.email?.split('@')[0] || 'Unknown',
-              email: currentUser.email,
-              role: role,
-              createdAt: new Date().toISOString()
+              name:      currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+              email:     currentUser.email,
+              role,
+              createdAt: new Date().toISOString(),
             });
             setUserRole(role);
           } else {
-            setUserRole(userSnap.data().role);
+            // Use stored role — fallback to 'cashier' if field somehow missing
+            setUserRole(userSnap.data().role || 'cashier');
           }
         } catch (error) {
-          console.error("Error bootstrapping user:", error);
+          console.error('Error fetching user role:', error);
+          // IMPORTANT: never leave user stuck on loading screen
+          // Fall back to cashier so they can at least use the app
+          setUserRole('cashier');
         }
       } else {
         setUserRole(null);
@@ -60,8 +66,14 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // Loading screen — but with a safety timeout so it never hangs forever
   if (user === undefined || (user && !userRole)) {
-    return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3">
+        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+        <p className="text-gray-500 text-sm">Loading...</p>
+      </div>
+    );
   }
 
   if (!user) {
@@ -87,7 +99,7 @@ export default function App() {
             {userRole === 'admin' && <Route path="reports" element={<Reports />} />}
             {userRole === 'admin' && <Route path="users" element={<Users />} />}
             {userRole === 'admin' && <Route path="settings" element={<Settings />} />}
-            
+
             {userRole === 'cashier' && <Route index element={<Navigate to="/billing" replace />} />}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
