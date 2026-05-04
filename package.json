@@ -2,7 +2,7 @@
   "name": "gmh-pharmacy-pos",
   "productName": "GMH Pharmacy POS",
   "private": true,
-  "version": "1.0.8",
+  "version": "1.0.12",
   "description": "GMH Pharmacy Point of Sale System",
   "main": "main.js",
   "type": "commonjs",
