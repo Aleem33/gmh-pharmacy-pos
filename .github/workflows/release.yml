@@ -6,6 +6,9 @@ on:
       - 'v*'
 
 jobs:
+  # ─────────────────────────────────────────────────────────
+  # JOB 1 — Windows desktop (.exe + portable installer)
+  # ─────────────────────────────────────────────────────────
   build-windows:
     runs-on: windows-latest
 
@@ -21,12 +24,88 @@ jobs:
       - name: Install dependencies
         run: npm install --legacy-peer-deps
 
-      - name: Build Vite
+      - name: Build Vite (Electron mode — base "./" for file:// loading)
         run: node node_modules/vite/bin/vite.js build
         env:
           NODE_OPTIONS: --max-old-space-size=4096
 
-      - name: Package & Publish
+      - name: Package & publish to GitHub Releases
         run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+  # ─────────────────────────────────────────────────────────
+  # JOB 2 — Android APK (signed release build)
+  # ─────────────────────────────────────────────────────────
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Build Vite (Android mode — base "/" for Capacitor server)
+        run: npm run build:android
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      # Scaffold android/ on first run if it wasn't committed
+      - name: Add Android platform (first-time only)
+        run: |
+          if [ ! -d "android" ]; then
+            echo "android/ not found — scaffolding with Capacitor..."
+            npx cap add android
+          else
+            echo "android/ already committed — skipping scaffold"
+          fi
+
+      - name: Sync web build into Android project
+        run: npx cap sync android
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x android/gradlew
+
+      - name: Build release APK
+        run: cd android && ./gradlew assembleRelease --no-daemon
+
+      - name: Sign APK
+        uses: r0adkll/sign-android-release@v1
+        id: sign_apk
+        with:
+          releaseDirectory: android/app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          alias: ${{ secrets.ANDROID_KEY_ALIAS }}
+          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Rename signed APK with version tag
+        run: |
+          TAG="${{ github.ref_name }}"
+          SRC="${{ steps.sign_apk.outputs.signedReleaseFile }}"
+          DEST="android/app/build/outputs/apk/release/GMH-Pharmacy-POS-${TAG}.apk"
+          mv "$SRC" "$DEST"
+          echo "APK_PATH=$DEST" >> $GITHUB_ENV
+
+      - name: Attach APK to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.APK_PATH }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
