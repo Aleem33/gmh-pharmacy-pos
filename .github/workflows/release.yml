@@ -79,6 +79,15 @@ jobs:
       - name: Sync web build into Android project
         run: npx cap sync android
 
+      - name: Patch Java compatibility to 17
+        run: |
+          # Capacitor may scaffold build.gradle files with JavaVersion.VERSION_21
+          # GitHub Actions runners only have Java 17 — patch all build.gradle files
+          find android -name "build.gradle" | xargs sed -i \
+            's/JavaVersion\.VERSION_21/JavaVersion.VERSION_17/g; s/sourceCompatibility = 21/sourceCompatibility = 17/g; s/targetCompatibility = 21/targetCompatibility = 17/g'
+          echo "Patched build.gradle files:"
+          grep -rn "sourceCompatibility\|targetCompatibility" android --include="build.gradle"
+
       - name: Make Gradle wrapper executable
         run: chmod +x android/gradlew
 
