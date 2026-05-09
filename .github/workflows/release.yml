@@ -84,6 +84,9 @@ jobs:
       - name: Build release APK
         run: cd android && ./gradlew assembleRelease --no-daemon
 
+      - name: Install Android build-tools 34.0.0
+        run: ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "build-tools;34.0.0"
+
       - name: Sign APK
         uses: r0adkll/sign-android-release@v1
         id: sign_apk
@@ -93,6 +96,7 @@ jobs:
           alias: ${{ secrets.ANDROID_KEY_ALIAS }}
           keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          buildToolsVersion: 34.0.0
 
       - name: Rename signed APK with version tag
         run: |
