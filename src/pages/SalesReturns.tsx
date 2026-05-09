@@ -99,6 +99,7 @@ export function SalesReturns() {
   const [returnItems, setReturnItems] = useState<any[]>([]);
   const [returnReason, setReturnReason] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const slipRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -213,7 +214,8 @@ export function SalesReturns() {
   };
 
   const handleSubmit = async () => {
-    if (!hasAnyReturn || !selectedSale) return;
+    if (!hasAnyReturn || !selectedSale || submitting) return;
+    setSubmitting(true);
     try {
       const itemsToReturn = returnItems.filter(i => i.returnQty > 0).map(i => ({
         cartItemId: i.cartItemId,
@@ -252,6 +254,8 @@ export function SalesReturns() {
       setTimeout(() => printReturnData(dataWithId), 400);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'saleReturns');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -433,11 +437,11 @@ export function SalesReturns() {
                 </button>
                 <button
                   onClick={handleSubmit}
-                  disabled={!hasAnyReturn}
+                  disabled={!hasAnyReturn || submitting}
                   className="px-4 py-2 bg-red-600 text-white rounded-md font-medium text-sm hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
                 >
                   <Printer className="w-4 h-4" />
-                  Confirm Return & Print Slip
+                  {submitting ? 'Processing...' : 'Confirm Return & Print Slip'}
                 </button>
               </div>
             </div>

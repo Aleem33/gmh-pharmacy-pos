@@ -74,6 +74,7 @@ function buildPurchaseReturnSlip(data: any, upb: number) {
 
 export function PurchaseReturns() {
   const [purchases, setPurchases] = useState<any[]>([]);
+  const [medicines, setMedicines] = useState<Record<string, number>>({});  // medicineId → current stock
   const [returns, setReturns] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [selectedPurchase, setSelectedPurchase] = useState<any>(null);
@@ -81,8 +82,15 @@ export function PurchaseReturns() {
   const [returnLoose, setReturnLoose] = useState('0');
   const [returnReason, setReturnReason] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    const unsubMedicines = onSnapshot(collection(db, 'medicines'), (snap) => {
+      const stockMap: Record<string, number> = {};
+      snap.docs.forEach(d => { stockMap[d.id] = d.data().stock || 0; });
+      setMedicines(stockMap);
+    }, (e) => handleFirestoreError(e, OperationType.GET, 'medicines'));
+
     const unsubPurchases = onSnapshot(collection(db, 'purchases'), (snap) => {
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       list.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -95,7 +103,7 @@ export function PurchaseReturns() {
       setReturns(list);
     }, (e) => handleFirestoreError(e, OperationType.GET, 'purchaseReturns'));
 
-    return () => { unsubPurchases(); unsubReturns(); };
+    return () => { unsubMedicines(); unsubPurchases(); unsubReturns(); };
   }, []);
 
   const filteredPurchases = purchases.filter(p =>
@@ -124,7 +132,10 @@ export function PurchaseReturns() {
   const loose = parseInt(returnLoose || '0');
   const totalUnitsToReturn = boxes * unitsPerBox + loose;
   const alreadyReturned = selectedPurchase ? getAlreadyReturnedUnits(selectedPurchase.id) : 0;
-  const maxReturnable = selectedPurchase ? selectedPurchase.totalUnitsAdded - alreadyReturned : 0;
+  const currentStock = selectedPurchase ? (medicines[selectedPurchase.medicineId] ?? 0) : 0;
+  const maxReturnable = selectedPurchase
+    ? Math.min(selectedPurchase.totalUnitsAdded - alreadyReturned, currentStock)
+    : 0;
   const isValid = totalUnitsToReturn > 0 && totalUnitsToReturn <= maxReturnable;
   const refundAmount = (boxes * unitsPerBox + loose) * costPricePerUnit;
 
@@ -138,7 +149,8 @@ export function PurchaseReturns() {
   };
 
   const handleSubmit = async () => {
-    if (!isValid || !selectedPurchase) return;
+    if (!isValid || !selectedPurchase || submitting) return;
+    setSubmitting(true);
     try {
       const returnDoc = {
         originalPurchaseId: selectedPurchase.id,
@@ -170,6 +182,8 @@ export function PurchaseReturns() {
       setTimeout(() => printSlip(buildPurchaseReturnSlip(dataWithId, unitsPerBox)), 400);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'purchaseReturns');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -298,6 +312,10 @@ export function PurchaseReturns() {
                   <span>Already returned:</span>
                   <span className="font-medium text-orange-600">{formatUnits(alreadyReturned, unitsPerBox)}</span>
                 </div>
+                <div className="flex justify-between text-gray-600">
+                  <span>Current stock:</span>
+                  <span className="font-medium text-blue-600">{formatUnits(currentStock, unitsPerBox)}</span>
+                </div>
                 <div className="flex justify-between font-semibold text-gray-900 pt-1 border-t border-gray-200">
                   <span>Available to return:</span>
                   <span>{formatUnits(maxReturnable, unitsPerBox)}</span>
@@ -376,11 +394,11 @@ export function PurchaseReturns() {
                 </button>
                 <button
                   onClick={handleSubmit}
-                  disabled={!isValid}
+                  disabled={!isValid || submitting}
                   className="px-4 py-2 bg-orange-600 text-white rounded-md font-medium text-sm hover:bg-orange-700 disabled:opacity-50 flex items-center gap-2"
                 >
                   <Printer className="w-4 h-4" />
-                  Confirm Return & Print Slip
+                  {submitting ? 'Processing...' : 'Confirm Return & Print Slip'}
                 </button>
               </div>
             </div>

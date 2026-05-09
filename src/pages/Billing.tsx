@@ -208,9 +208,9 @@ export function Billing() {
     return `${loose} Loose`;
   };
 
-  // ── Shared panel JSX (variables, not components — prevents focus loss on re-render) ──
+  // ── Shared panel components ───────────────────────────────────────────────
 
-  const medicinesPanel = (
+  const MedicinesPanel = () => (
     <div className="flex-1 flex flex-col bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
       <div className="p-4 border-b border-gray-100">
         <div className="relative">
@@ -265,7 +265,7 @@ export function Billing() {
     </div>
   );
 
-  const cartPanel = (
+  const CartPanel = () => (
     <div className="flex-1 md:w-96 md:flex-none bg-white rounded-xl shadow-sm border border-gray-100 flex flex-col">
       {/* Cart header */}
       <div className="p-4 border-b border-gray-100 bg-gray-50 space-y-3">
@@ -584,9 +584,9 @@ export function Billing() {
 
       {/* ── DESKTOP LAYOUT: side-by-side ── */}
       <div className="hidden md:flex h-full gap-6 print:hidden">
-        {medicinesPanel}
+        <MedicinesPanel />
         <div className="w-96 flex flex-col">
-          {cartPanel}
+          <CartPanel />
         </div>
       </div>
 
@@ -614,12 +614,9 @@ export function Billing() {
           </button>
         </div>
 
-        {/* Active panel — both stay mounted, CSS hides the inactive one to preserve input focus */}
-        <div className={`flex-1 overflow-hidden flex-col ${mobileTab === 'medicines' ? 'flex' : 'hidden'}`}>
-          {medicinesPanel}
-        </div>
-        <div className={`flex-1 overflow-hidden flex-col ${mobileTab === 'cart' ? 'flex' : 'hidden'}`}>
-          {cartPanel}
+        {/* Active panel fills remaining height */}
+        <div className="flex-1 overflow-hidden flex flex-col">
+          {mobileTab === 'medicines' ? <MedicinesPanel /> : <CartPanel />}
         </div>
       </div>
     </>
