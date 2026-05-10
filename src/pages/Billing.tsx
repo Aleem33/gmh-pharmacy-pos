@@ -584,9 +584,9 @@ export function Billing() {
 
       {/* ── DESKTOP LAYOUT: side-by-side ── */}
       <div className="hidden md:flex h-full gap-6 print:hidden">
-        <MedicinesPanel />
+        {MedicinesPanel()}
         <div className="w-96 flex flex-col">
-          <CartPanel />
+          {CartPanel()}
         </div>
       </div>
 
@@ -614,9 +614,14 @@ export function Billing() {
           </button>
         </div>
 
-        {/* Active panel fills remaining height */}
+        {/* Both panels stay mounted — only visibility toggled — so search input never loses focus */}
         <div className="flex-1 overflow-hidden flex flex-col">
-          {mobileTab === 'medicines' ? <MedicinesPanel /> : <CartPanel />}
+          <div className={mobileTab === 'medicines' ? 'flex flex-col flex-1 overflow-hidden' : 'hidden'}>
+            {MedicinesPanel()}
+          </div>
+          <div className={mobileTab === 'cart' ? 'flex flex-col flex-1 overflow-hidden' : 'hidden'}>
+            {CartPanel()}
+          </div>
         </div>
       </div>
     </>
