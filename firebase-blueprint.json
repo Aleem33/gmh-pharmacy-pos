@@ -1,0 +1,107 @@
+{
+  "entities": {
+    "Medicine": {
+      "title": "Medicine",
+      "description": "A medicine item in the inventory",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the medicine" },
+        "price": { "type": "number", "description": "Selling price" },
+        "costPrice": { "type": "number", "description": "Purchase cost price" },
+        "stock": { "type": "number", "description": "Current stock level" },
+        "expiryDate": { "type": "string", "format": "date-time", "description": "Expiry date of the batch" },
+        "batchNo": { "type": "string", "description": "Batch number" },
+        "supplierId": { "type": "string", "description": "ID of the supplier" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["name", "price", "costPrice", "stock", "expiryDate", "batchNo", "createdAt"]
+    },
+    "Sale": {
+      "title": "Sale",
+      "description": "A completed sale transaction",
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "List of items sold",
+          "items": {
+            "type": "object",
+            "properties": {
+              "medicineId": { "type": "string" },
+              "name": { "type": "string" },
+              "quantity": { "type": "number" },
+              "price": { "type": "number" },
+              "total": { "type": "number" }
+            }
+          }
+        },
+        "subtotal": { "type": "number" },
+        "discount": { "type": "number" },
+        "total": { "type": "number" },
+        "date": { "type": "string", "format": "date-time" },
+        "customerType": { "type": "string", "enum": ["customer", "hospital"], "description": "Type of customer" },
+        "customerId": { "type": "string", "description": "Optional customer ID" },
+        "cashierId": { "type": "string", "description": "ID of the user who processed the sale" }
+      },
+      "required": ["items", "subtotal", "discount", "total", "date", "cashierId", "customerType"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "A customer record",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "creditBalance": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "phone", "creditBalance", "createdAt"]
+    },
+    "Supplier": {
+      "title": "Supplier",
+      "description": "A supplier record",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "contact": { "type": "string" },
+        "address": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "contact", "createdAt"]
+    },
+    "User": {
+      "title": "User",
+      "description": "A system user (staff)",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["admin", "cashier", "pharmacist"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "email", "role", "createdAt"]
+    }
+  },
+  "firestore": {
+    "medicines/{medicineId}": {
+      "schema": { "$ref": "#/entities/Medicine" },
+      "description": "Inventory of medicines"
+    },
+    "sales/{saleId}": {
+      "schema": { "$ref": "#/entities/Sale" },
+      "description": "Records of all sales"
+    },
+    "customers/{customerId}": {
+      "schema": { "$ref": "#/entities/Customer" },
+      "description": "Customer records"
+    },
+    "suppliers/{supplierId}": {
+      "schema": { "$ref": "#/entities/Supplier" },
+      "description": "Supplier records"
+    },
+    "users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "System users and their roles"
+    }
+  }
+}

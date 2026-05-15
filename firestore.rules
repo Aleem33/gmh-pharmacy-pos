@@ -1,0 +1,139 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper functions ─────────────────────────────────────────────────────
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function userExists() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        (userExists() && userDoc().role == 'admin') ||
+        request.auth.token.email == 'aleemfarrukh13@gmail.com' ||
+        request.auth.token.email == 'admin@gmhpharmacy.com'
+      );
+    }
+
+    function isPharmacist() {
+      return isAuthenticated() && userExists() && userDoc().role == 'pharmacist';
+    }
+
+    function isCashier() {
+      return isAuthenticated() && userExists() && userDoc().role == 'cashier';
+    }
+
+    function hasRole(roles) {
+      return isAdmin() || (isAuthenticated() && userExists() && userDoc().role in roles);
+    }
+
+    function isAnyStaff() {
+      return isAdmin() || isPharmacist() || isCashier();
+    }
+
+    // ── Users ────────────────────────────────────────────────────────────────
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+
+      // KEY FIX: allow a user to create THEIR OWN document on first login
+      // This is needed when App.tsx bootstraps a new user into Firestore
+      allow create: if isAuthenticated() && (
+        isAdmin() ||
+        request.auth.uid == userId   // user creating their own doc
+      );
+
+      // Only admins can update OTHER users; a user can update themselves
+      allow update: if isAdmin() || request.auth.uid == userId;
+      allow delete: if isAdmin();
+    }
+
+    // ── Medicines ────────────────────────────────────────────────────────────
+    match /medicines/{medicineId} {
+      allow read: if isAuthenticated();
+      allow create: if hasRole(['pharmacist']);
+      // Pharmacists/admins can update anything; cashiers can only update stock
+      allow update: if hasRole(['pharmacist']) ||
+                    (isCashier() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock']));
+      allow delete: if isAdmin();
+    }
+
+    // ── Sales ────────────────────────────────────────────────────────────────
+    match /sales/{saleId} {
+      allow read: if isAuthenticated();
+      allow create: if hasRole(['cashier']);
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // ── Sale Returns ─────────────────────────────────────────────────────────
+    match /saleReturns/{returnId} {
+      allow read: if isAuthenticated();
+      allow create: if hasRole(['cashier']);
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // ── Purchases ────────────────────────────────────────────────────────────
+    match /purchases/{purchaseId} {
+      allow read: if isAuthenticated();
+      allow create: if hasRole(['pharmacist']);
+      allow update: if hasRole(['pharmacist']);
+      allow delete: if isAdmin();
+    }
+
+    // ── Purchase Returns ─────────────────────────────────────────────────────
+    match /purchaseReturns/{returnId} {
+      allow read: if isAuthenticated();
+      allow create: if hasRole(['pharmacist']);
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // ── Customers ────────────────────────────────────────────────────────────
+    match /customers/{customerId} {
+      allow read: if isAuthenticated();
+      allow create: if isAnyStaff();
+      allow update: if isAnyStaff();
+      allow delete: if isAdmin();
+    }
+
+    // ── Customer Payments ────────────────────────────────────────────────────
+    match /customerPayments/{paymentId} {
+      allow read: if isAuthenticated();
+      allow create: if isAnyStaff();
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // ── Suppliers ────────────────────────────────────────────────────────────
+    match /suppliers/{supplierId} {
+      allow read: if isAuthenticated();
+      allow create: if hasRole(['pharmacist']);
+      allow update: if hasRole(['pharmacist']);
+      allow delete: if isAdmin();
+    }
+
+    // ── Expenses ─────────────────────────────────────────────────────────────
+    match /expenses/{expenseId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ── Settings ─────────────────────────────────────────────────────────────
+    match /settings/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+  }
+}

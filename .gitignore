@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+release/
+
+# Android build output (keep the android/ project, ignore its build artefacts)
+android/app/build/
+android/.gradle/
+android/build/
+android/local.properties
+*.apk
+*.aab
+*.keystore
+
+# Electron
+out/
+
+# Env
+.env
+.env.local
+
+# Misc
+.DS_Store
+Thumbs.db
+*.log
