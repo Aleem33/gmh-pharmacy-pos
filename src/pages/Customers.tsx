@@ -46,6 +46,12 @@ export function Customers() {
     return () => { unsub1(); unsub2(); unsub3(); };
   }, []);
 
+  useEffect(() => {
+    if (!selectedSale) return;
+    const fresh = sales.find(s => s.id === selectedSale.id);
+    if (fresh) setSelectedSale(fresh);
+  }, [sales, selectedSale?.id]);
+
   const filteredCustomers = customers.filter(c =>
     c.name.toLowerCase().includes(search.toLowerCase()) ||
     (c.phone || '').includes(search)
@@ -58,53 +64,82 @@ export function Customers() {
   const customerPayments = (customerId: string) =>
     payments.filter(p => p.customerId === customerId);
 
+  const getSaleDue = (sale: any) => {
+    const pending = sale.pendingAmount || 0;
+    if (pending > 0) return pending;
+    const total = sale.total || 0;
+    const paid = sale.amountPaid ?? 0;
+    return paid < total ? total - paid : 0;
+  };
+
+  const applyPaymentToSale = async (sale: any, payAmount: number) => {
+    const due = getSaleDue(sale);
+    const pay = Math.min(payAmount, due);
+    if (pay <= 0) return 0;
+    const newPending = due - pay;
+    const newAmountPaid = (sale.amountPaid ?? 0) + pay;
+    await updateDoc(doc(db, 'sales', sale.id), {
+      pendingAmount: newPending,
+      amountPaid: newAmountPaid,
+    });
+    return pay;
+  };
+
   const totalPending = filteredCustomers.reduce((sum, c) => sum + (c.creditBalance || 0), 0);
+
+  const openPaymentModal = (customer: any, sale?: any) => {
+    setPaymentModal({ customer, sale: sale || null });
+    setPaymentAmount(sale ? String(getSaleDue(sale)) : '');
+    setPaymentNote('');
+  };
 
   const handleRecordPayment = async () => {
     if (!paymentModal) return;
+    const { customer, sale } = paymentModal;
     const amount = parseFloat(paymentAmount);
     if (!amount || amount <= 0) return;
-    const maxPayable = paymentModal.creditBalance || 0;
+    const maxPayable = sale ? getSaleDue(sale) : (customer.creditBalance || 0);
     if (amount > maxPayable) return;
     setPaymentLoading(true);
     try {
-      await addDoc(collection(db, 'customerPayments'), {
-        customerId: paymentModal.id, customerName: paymentModal.name,
+      const paymentData: Record<string, unknown> = {
+        customerId: customer.id, customerName: customer.name,
         amount, note: paymentNote || '', date: new Date().toISOString(),
-      });
-      await updateDoc(doc(db, 'customers', paymentModal.id), { creditBalance: increment(-amount) });
+      };
+      if (sale) {
+        paymentData.saleId = sale.id;
+        paymentData.saleDate = sale.date || '';
+      }
+      await addDoc(collection(db, 'customerPayments'), paymentData);
+      await updateDoc(doc(db, 'customers', customer.id), { creditBalance: increment(-amount) });
 
-      // Clear pendingAmount on sales for this customer, oldest-due-first
-      let remaining = amount;
-      const dueSales = customerSales(paymentModal.id)
-        .filter(s => (s.pendingAmount || 0) > 0)
-        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()); // oldest first
+      if (sale) {
+        await applyPaymentToSale(sale, amount);
+      } else {
+        // Apply to individual receipts, oldest due first
+        let remaining = amount;
+        const dueSales = customerSales(customer.id)
+          .filter(s => getSaleDue(s) > 0)
+          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-      for (const sale of dueSales) {
-        if (remaining <= 0) break;
-        const due = sale.pendingAmount || 0;
-        if (remaining >= due) {
-          // This sale is fully cleared
-          await updateDoc(doc(db, 'sales', sale.id), {
-            pendingAmount: 0,
-            amountPaid: sale.total,
-          });
-          remaining -= due;
-        } else {
-          // Partially cleared
-          await updateDoc(doc(db, 'sales', sale.id), {
-            pendingAmount: due - remaining,
-            amountPaid: (sale.amountPaid || 0) + remaining,
-          });
-          remaining = 0;
+        for (const s of dueSales) {
+          if (remaining <= 0) break;
+          const applied = await applyPaymentToSale(s, remaining);
+          remaining -= applied;
         }
       }
 
       const remainingBalance = maxPayable - amount;
+      const saleCleared = sale && amount >= maxPayable;
       setPaymentModal(null); setPaymentAmount(''); setPaymentNote('');
-      setSuccessMsg(remainingBalance <= 0
-        ? `${paymentModal.name}'s balance fully cleared!`
-        : `Rs. ${amount.toFixed(2)} recorded. Remaining: ${formatCurrency(remainingBalance)}`);
+      if (selectedSale?.id === sale?.id && saleCleared) setSelectedSale(null);
+      setSuccessMsg(saleCleared
+        ? 'Bill marked as paid!'
+        : remainingBalance <= 0 && !sale
+          ? `${customer.name}'s balance fully cleared!`
+          : `Rs. ${amount.toFixed(2)} recorded. Remaining: ${formatCurrency(
+              sale ? 0 : (customer.creditBalance || 0) - amount
+            )}`);
       setTimeout(() => setSuccessMsg(''), 5000);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'customerPayments');
@@ -145,7 +180,7 @@ export function Customers() {
 
     const totalBilled  = custSales.reduce((s, r) => s + (r.total || 0), 0);
     const totalPaidAmt = custSales.reduce((s, r) => s + (r.amountPaid ?? r.total ?? 0), 0);
-    const totalPending = custSales.reduce((s, r) => s + (r.pendingAmount || 0), 0);
+    const totalPending = custSales.reduce((s, r) => s + getSaleDue(r), 0);
 
     const rows = custSales.map((sale, idx) => {
       const itemLines = (sale.items || []).map((item: any) =>
@@ -156,7 +191,7 @@ export function Customers() {
         </tr>`
       ).join('');
 
-      const pending = sale.pendingAmount || 0;
+      const pending = getSaleDue(sale);
       return `
         <div style="margin-bottom:14px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
           <div style="background:#f3f4f6;padding:7px 10px;display:flex;justify-content:space-between;align-items:center;">
@@ -211,7 +246,9 @@ export function Customers() {
   };
 
   const payAmount  = parseFloat(paymentAmount) || 0;
-  const maxPayable = paymentModal?.creditBalance || 0;
+  const maxPayable = paymentModal
+    ? (paymentModal.sale ? getSaleDue(paymentModal.sale) : (paymentModal.customer.creditBalance || 0))
+    : 0;
   const isPayValid = payAmount > 0 && payAmount <= maxPayable;
   const willClear  = payAmount === maxPayable;
 
@@ -290,12 +327,13 @@ export function Customers() {
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
-                      {(cust.creditBalance || 0) > 0 && (
+                      {(cust.creditBalance || 0) > 0 && custSales.some(s => getSaleDue(s) > 0) && (
                         <button
-                          onClick={() => { setPaymentModal(cust); setPaymentAmount(''); setPaymentNote(''); }}
+                          onClick={() => openPaymentModal(cust)}
                           className="flex items-center gap-1 px-2.5 py-1.5 bg-green-600 text-white rounded-lg text-xs font-semibold hover:bg-green-700"
+                          title="Pay across bills (oldest first)"
                         >
-                          <Wallet className="w-3.5 h-3.5" /> Pay
+                          <Wallet className="w-3.5 h-3.5" /> Pay All
                         </button>
                       )}
                       {customerSales(cust.id).length > 0 && (
@@ -366,10 +404,18 @@ export function Customers() {
                                   </p>
                                   <p className="text-xs text-gray-400">{sale.items?.length || 0} item(s)</p>
                                 </div>
-                                <button onClick={() => setSelectedSale(sale)}
-                                  className="flex items-center gap-1 text-blue-600 text-xs font-medium">
-                                  <Eye className="w-3.5 h-3.5" /> View
-                                </button>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {getSaleDue(sale) > 0 && (
+                                    <button onClick={() => openPaymentModal(cust, sale)}
+                                      className="flex items-center gap-1 px-2 py-1 bg-green-600 text-white rounded text-xs font-semibold hover:bg-green-700">
+                                      <Wallet className="w-3 h-3" /> Pay
+                                    </button>
+                                  )}
+                                  <button onClick={() => setSelectedSale(sale)}
+                                    className="flex items-center gap-1 text-blue-600 text-xs font-medium">
+                                    <Eye className="w-3.5 h-3.5" /> View
+                                  </button>
+                                </div>
                               </div>
                               <div className="grid grid-cols-3 gap-2 text-center">
                                 <div className="bg-gray-50 rounded p-1.5">
@@ -380,10 +426,10 @@ export function Customers() {
                                   <p className="text-[10px] text-gray-400">Paid</p>
                                   <p className="text-xs font-bold text-green-700">{formatCurrency(sale.amountPaid ?? sale.total)}</p>
                                 </div>
-                                <div className={`rounded p-1.5 ${(sale.pendingAmount || 0) > 0 ? 'bg-red-50' : 'bg-gray-50'}`}>
+                                <div className={`rounded p-1.5 ${getSaleDue(sale) > 0 ? 'bg-red-50' : 'bg-gray-50'}`}>
                                   <p className="text-[10px] text-gray-400">Pending</p>
-                                  <p className={`text-xs font-bold ${(sale.pendingAmount || 0) > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                                    {(sale.pendingAmount || 0) > 0 ? formatCurrency(sale.pendingAmount) : '✓'}
+                                  <p className={`text-xs font-bold ${getSaleDue(sale) > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                                    {getSaleDue(sale) > 0 ? formatCurrency(getSaleDue(sale)) : '✓'}
                                   </p>
                                 </div>
                               </div>
@@ -401,7 +447,7 @@ export function Customers() {
                             </div>
                             <div>
                               <p className="text-[10px] text-red-600 font-semibold">PENDING</p>
-                              <p className="text-xs font-bold text-red-800">{formatCurrency(custSales.reduce((s, r) => s + (r.pendingAmount || 0), 0))}</p>
+                              <p className="text-xs font-bold text-red-800">{formatCurrency(custSales.reduce((s, r) => s + getSaleDue(r), 0))}</p>
                             </div>
                           </div>
                         </div>
@@ -416,7 +462,7 @@ export function Customers() {
                                 <th className="p-3 text-right">Total</th>
                                 <th className="p-3 text-right">Paid</th>
                                 <th className="p-3 text-right">Pending</th>
-                                <th className="p-3 text-right">Details</th>
+                                <th className="p-3 text-right">Actions</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100">
@@ -429,15 +475,23 @@ export function Customers() {
                                   <td className="p-3 text-right font-semibold text-gray-900">{formatCurrency(sale.total)}</td>
                                   <td className="p-3 text-right text-green-700 font-medium">{formatCurrency(sale.amountPaid ?? sale.total)}</td>
                                   <td className="p-3 text-right">
-                                    {(sale.pendingAmount || 0) > 0
-                                      ? <span className="font-bold text-red-600">{formatCurrency(sale.pendingAmount)}</span>
+                                    {getSaleDue(sale) > 0
+                                      ? <span className="font-bold text-red-600">{formatCurrency(getSaleDue(sale))}</span>
                                       : <span className="text-green-600 text-xs font-medium">✓ Paid</span>}
                                   </td>
                                   <td className="p-3 text-right">
-                                    <button onClick={() => setSelectedSale(sale)}
-                                      className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 text-xs font-medium">
-                                      <Eye className="w-3.5 h-3.5" /> View
-                                    </button>
+                                    <div className="inline-flex items-center gap-2 justify-end">
+                                      {getSaleDue(sale) > 0 && (
+                                        <button onClick={() => openPaymentModal(cust, sale)}
+                                          className="inline-flex items-center gap-1 px-2 py-1 bg-green-600 text-white rounded text-xs font-semibold hover:bg-green-700">
+                                          <Wallet className="w-3 h-3" /> Pay
+                                        </button>
+                                      )}
+                                      <button onClick={() => setSelectedSale(sale)}
+                                        className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 text-xs font-medium">
+                                        <Eye className="w-3.5 h-3.5" /> View
+                                      </button>
+                                    </div>
                                   </td>
                                 </tr>
                               ))}
@@ -447,7 +501,7 @@ export function Customers() {
                                 <td className="p-3 text-blue-800" colSpan={2}>TOTAL — {custSales.length} sale(s)</td>
                                 <td className="p-3 text-right text-blue-900">{formatCurrency(custSales.reduce((s, r) => s + (r.total || 0), 0))}</td>
                                 <td className="p-3 text-right text-green-700">{formatCurrency(custSales.reduce((s, r) => s + (r.amountPaid ?? r.total ?? 0), 0))}</td>
-                                <td className="p-3 text-right text-red-600">{formatCurrency(custSales.reduce((s, r) => s + (r.pendingAmount || 0), 0))}</td>
+                                <td className="p-3 text-right text-red-600">{formatCurrency(custSales.reduce((s, r) => s + getSaleDue(r), 0))}</td>
                                 <td className="p-3"></td>
                               </tr>
                             </tfoot>
@@ -535,8 +589,18 @@ export function Customers() {
           <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:max-w-md overflow-hidden">
             <div className="p-5 border-b border-gray-100 flex justify-between items-start">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">Record Payment</h2>
-                <p className="text-sm text-gray-500 mt-0.5">{paymentModal.name} • {paymentModal.phone}</p>
+                <h2 className="text-xl font-bold text-gray-900">
+                  {paymentModal.sale ? 'Pay Bill' : 'Record Payment'}
+                </h2>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  {paymentModal.customer.name} • {paymentModal.customer.phone}
+                </p>
+                {paymentModal.sale && (
+                  <p className="text-xs text-gray-400 mt-1">
+                    Bill from {paymentModal.sale.date ? format(new Date(paymentModal.sale.date), 'MMM dd, yyyy') : 'N/A'}
+                    {' '}• Total {formatCurrency(paymentModal.sale.total)}
+                  </p>
+                )}
               </div>
               <button onClick={() => setPaymentModal(null)} className="p-1 text-gray-400 hover:text-gray-600">
                 <X className="w-5 h-5" />
@@ -544,7 +608,9 @@ export function Customers() {
             </div>
             <div className="p-5 space-y-4">
               <div className="bg-red-50 border border-red-100 rounded-lg p-4 flex justify-between items-center">
-                <span className="text-sm font-medium text-red-800">Outstanding Balance</span>
+                <span className="text-sm font-medium text-red-800">
+                  {paymentModal.sale ? 'Amount Due on This Bill' : 'Outstanding Balance'}
+                </span>
                 <span className="text-xl font-bold text-red-700">{formatCurrency(maxPayable)}</span>
               </div>
               <div>
@@ -593,7 +659,7 @@ export function Customers() {
                 <button onClick={handleRecordPayment} disabled={!isPayValid || paymentLoading}
                   className="flex-1 py-2.5 bg-green-600 text-white rounded-lg font-medium text-sm hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2">
                   <Wallet className="w-4 h-4" />
-                  {paymentLoading ? 'Saving…' : 'Record Payment'}
+                  {paymentLoading ? 'Saving…' : paymentModal.sale ? 'Pay Bill' : 'Record Payment'}
                 </button>
               </div>
             </div>
@@ -690,14 +756,23 @@ export function Customers() {
                 <span>Total</span>
                 <span className="text-blue-600 text-lg">{formatCurrency(selectedSale.total)}</span>
               </div>
-              {(selectedSale.pendingAmount || 0) > 0 ? (
+              {getSaleDue(selectedSale) > 0 ? (
                 <>
                   <div className="flex justify-between text-sm text-green-700">
-                    <span>Amount Paid</span><span>{formatCurrency(selectedSale.amountPaid)}</span>
+                    <span>Amount Paid</span><span>{formatCurrency(selectedSale.amountPaid ?? 0)}</span>
                   </div>
                   <div className="flex justify-between text-sm font-bold text-red-700 bg-red-50 px-3 py-2 rounded-lg">
-                    <span>Pending</span><span>{formatCurrency(selectedSale.pendingAmount)}</span>
+                    <span>Pending</span><span>{formatCurrency(getSaleDue(selectedSale))}</span>
                   </div>
+                  {(() => {
+                    const cust = customers.find(c => c.id === selectedSale.customerId);
+                    return cust ? (
+                      <button type="button" onClick={() => openPaymentModal(cust, selectedSale)}
+                        className="w-full mt-2 py-2.5 bg-green-600 text-white rounded-lg font-medium text-sm hover:bg-green-700 flex items-center justify-center gap-2">
+                        <Wallet className="w-4 h-4" /> Pay This Bill
+                      </button>
+                    ) : null;
+                  })()}
                 </>
               ) : (
                 <div className="text-xs text-green-700 bg-green-50 px-3 py-2 rounded-lg">✓ Fully Paid</div>
