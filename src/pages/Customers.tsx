@@ -207,7 +207,7 @@ export function Customers() {
         </div>
       </div>`;
 
-    printOrShare(html, \`\${cust.name.replace(/\s+/g,'-')}-bills.html\`);
+    printOrShare(html, `${cust.name.replace(/\s+/g,'-')}-bills.html`);
   };
 
   const payAmount  = parseFloat(paymentAmount) || 0;
