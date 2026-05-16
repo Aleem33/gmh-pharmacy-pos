@@ -5,9 +5,10 @@ import {
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { formatCurrency } from '../lib/utils';
+import { printOrShare } from '../lib/nativeUtils';
 import {
   Plus, Edit2, Trash2, Search, ChevronDown, ChevronUp,
-  Eye, X, Wallet, CheckCircle, Clock, CreditCard, Receipt
+  Eye, X, Wallet, CheckCircle, Clock, CreditCard, Receipt, Printer
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -72,11 +73,38 @@ export function Customers() {
         amount, note: paymentNote || '', date: new Date().toISOString(),
       });
       await updateDoc(doc(db, 'customers', paymentModal.id), { creditBalance: increment(-amount) });
-      const remaining = maxPayable - amount;
+
+      // Clear pendingAmount on sales for this customer, oldest-due-first
+      let remaining = amount;
+      const dueSales = customerSales(paymentModal.id)
+        .filter(s => (s.pendingAmount || 0) > 0)
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()); // oldest first
+
+      for (const sale of dueSales) {
+        if (remaining <= 0) break;
+        const due = sale.pendingAmount || 0;
+        if (remaining >= due) {
+          // This sale is fully cleared
+          await updateDoc(doc(db, 'sales', sale.id), {
+            pendingAmount: 0,
+            amountPaid: sale.total,
+          });
+          remaining -= due;
+        } else {
+          // Partially cleared
+          await updateDoc(doc(db, 'sales', sale.id), {
+            pendingAmount: due - remaining,
+            amountPaid: (sale.amountPaid || 0) + remaining,
+          });
+          remaining = 0;
+        }
+      }
+
+      const remainingBalance = maxPayable - amount;
       setPaymentModal(null); setPaymentAmount(''); setPaymentNote('');
-      setSuccessMsg(remaining <= 0
+      setSuccessMsg(remainingBalance <= 0
         ? `${paymentModal.name}'s balance fully cleared!`
-        : `Rs. ${amount.toFixed(2)} recorded. Remaining: ${formatCurrency(remaining)}`);
+        : `Rs. ${amount.toFixed(2)} recorded. Remaining: ${formatCurrency(remainingBalance)}`);
       setTimeout(() => setSuccessMsg(''), 5000);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'customerPayments');
@@ -109,6 +137,77 @@ export function Customers() {
     try { await deleteDoc(doc(db, 'customers', confirmDeleteId)); }
     catch (error) { handleFirestoreError(error, OperationType.DELETE, `customers/${confirmDeleteId}`); }
     finally { setConfirmDeleteId(null); }
+  };
+
+  const handlePrintAllBills = (cust: any) => {
+    const custSales = customerSales(cust.id);
+    if (custSales.length === 0) return;
+
+    const totalBilled  = custSales.reduce((s, r) => s + (r.total || 0), 0);
+    const totalPaidAmt = custSales.reduce((s, r) => s + (r.amountPaid ?? r.total ?? 0), 0);
+    const totalPending = custSales.reduce((s, r) => s + (r.pendingAmount || 0), 0);
+
+    const rows = custSales.map((sale, idx) => {
+      const itemLines = (sale.items || []).map((item: any) =>
+        `<tr>
+          <td style="padding:3px 6px;color:#555;font-size:11px;">${item.name}</td>
+          <td style="padding:3px 6px;text-align:center;font-size:11px;">${item.quantity} ${item.sellType}</td>
+          <td style="padding:3px 6px;text-align:right;font-size:11px;">Rs.${(item.total||0).toFixed(2)}</td>
+        </tr>`
+      ).join('');
+
+      const pending = sale.pendingAmount || 0;
+      return `
+        <div style="margin-bottom:14px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+          <div style="background:#f3f4f6;padding:7px 10px;display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-weight:700;font-size:12px;color:#374151;">Bill #${idx + 1} &nbsp;—&nbsp; ${sale.date ? new Date(sale.date).toLocaleDateString('en-PK') : 'N/A'}</span>
+            ${pending > 0
+              ? `<span style="background:#fee2e2;color:#dc2626;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;">DUE Rs.${pending.toFixed(2)}</span>`
+              : `<span style="background:#dcfce7;color:#16a34a;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;">✓ PAID</span>`
+            }
+          </div>
+          <table style="width:100%;border-collapse:collapse;">
+            <thead><tr style="background:#f9fafb;">
+              <th style="padding:4px 6px;text-align:left;font-size:10px;color:#6b7280;">ITEM</th>
+              <th style="padding:4px 6px;text-align:center;font-size:10px;color:#6b7280;">QTY</th>
+              <th style="padding:4px 6px;text-align:right;font-size:10px;color:#6b7280;">AMOUNT</th>
+            </tr></thead>
+            <tbody>${itemLines}</tbody>
+          </table>
+          <div style="padding:5px 10px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;font-size:11px;">
+            <span style="color:#6b7280;">Total: <b>Rs.${(sale.total||0).toFixed(2)}</b></span>
+            <span style="color:#16a34a;">Paid: <b>Rs.${(sale.amountPaid ?? sale.total ?? 0).toFixed(2)}</b></span>
+            ${pending > 0 ? `<span style="color:#dc2626;">Due: <b>Rs.${pending.toFixed(2)}</b></span>` : ''}
+          </div>
+        </div>`;
+    }).join('');
+
+    const html = `
+      <div style="font-family:monospace;max-width:320px;margin:0 auto;padding:8px;">
+        <div style="text-align:center;margin-bottom:12px;border-bottom:2px solid #111;padding-bottom:8px;">
+          <h2 style="margin:0;font-size:16px;">GMH PHARMACY POS</h2>
+          <p style="margin:4px 0 0;font-size:13px;font-weight:700;">${cust.name}</p>
+          ${cust.phone ? `<p style="margin:2px 0 0;font-size:11px;color:#555;">${cust.phone}</p>` : ''}
+          <p style="margin:2px 0 0;font-size:10px;color:#888;">Printed: ${new Date().toLocaleString('en-PK')}</p>
+        </div>
+        ${rows}
+        <div style="border-top:2px solid #111;padding-top:8px;margin-top:4px;">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;">
+            <span>Total Billed:</span><b>Rs.${totalBilled.toFixed(2)}</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;color:#16a34a;">
+            <span>Total Paid:</span><b>Rs.${totalPaidAmt.toFixed(2)}</b>
+          </div>
+          ${totalPending > 0
+            ? `<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;color:#dc2626;background:#fee2e2;padding:5px 8px;border-radius:4px;margin-top:4px;">
+                <span>OUTSTANDING:</span><span>Rs.${totalPending.toFixed(2)}</span>
+               </div>`
+            : `<div style="text-align:center;font-size:12px;font-weight:700;color:#16a34a;background:#dcfce7;padding:5px;border-radius:4px;margin-top:4px;">✓ ALL CLEAR</div>`
+          }
+        </div>
+      </div>`;
+
+    printOrShare(html, \`\${cust.name.replace(/\s+/g,'-')}-bills.html\`);
   };
 
   const payAmount  = parseFloat(paymentAmount) || 0;
@@ -197,6 +296,15 @@ export function Customers() {
                           className="flex items-center gap-1 px-2.5 py-1.5 bg-green-600 text-white rounded-lg text-xs font-semibold hover:bg-green-700"
                         >
                           <Wallet className="w-3.5 h-3.5" /> Pay
+                        </button>
+                      )}
+                      {customerSales(cust.id).length > 0 && (
+                        <button
+                          onClick={() => handlePrintAllBills(cust)}
+                          className="flex items-center gap-1 px-2.5 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-semibold hover:bg-purple-700"
+                          title="Print all bills"
+                        >
+                          <Printer className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Print</span>
                         </button>
                       )}
                       <button onClick={() => handleEdit(cust)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded">
