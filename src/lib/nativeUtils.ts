@@ -89,7 +89,9 @@ function iframePrint(slipHtml: string) {
 }
 
 function blobDownload(content: string, filename: string, mimeType: string) {
-  const blob = new Blob(['\uFEFF' + content], { type: mimeType });
+  // Only add BOM for CSV files — adding it to JSON breaks JSON.parse()
+  const bom = mimeType.includes('csv') ? '\uFEFF' : '';
+  const blob = new Blob([bom + content], { type: mimeType });
   const url  = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;

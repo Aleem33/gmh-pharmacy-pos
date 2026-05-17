@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, doc, updateDoc } from 'firebase/firestore';
 import { printPageOrShare, downloadOrShare } from '../lib/nativeUtils';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { formatCurrency } from '../lib/utils';
 import {
   Search, FileText, Eye, X, Printer, Download,
   Users, Building2, LayoutList, Table2,
-  ArrowUpDown, ArrowUp, ArrowDown, SlidersHorizontal,
+  ArrowUpDown, ArrowUp, ArrowDown, SlidersHorizontal, Edit2, Save,
 } from 'lucide-react';
 import { format, isWithinInterval, parseISO, startOfDay, endOfDay } from 'date-fns';
 
@@ -37,6 +37,8 @@ export function SalesHistory() {
   const [sales, setSales]               = useState<any[]>([]);
   const [search, setSearch]             = useState('');
   const [selectedSale, setSelectedSale] = useState<any | null>(null);
+  const [editingSale, setEditingSale]       = useState<any | null>(null);
+  const [editSaving, setEditSaving]         = useState(false);
   const [showPrintAlert, setShowPrintAlert] = useState(false);
   const [viewMode, setViewMode]         = useState<ViewMode>('summary');
   const [showFilters, setShowFilters]   = useState(false);
@@ -154,6 +156,42 @@ export function SalesHistory() {
     total:    filteredSales.reduce((s, r) => s + (r.total    || 0), 0),
     pending:  filteredSales.reduce((s, r) => s + (r.pendingAmount || 0), 0),
   }), [filteredSales]);
+
+  const handleSaveEdit = async () => {
+    if (!editingSale) return;
+    setEditSaving(true);
+    try {
+      const { id, ...data } = editingSale;
+      // Recalculate totals from items
+      const grossSubtotal     = editingSale.items.reduce((s: number, i: any) => s + i.quantity * i.price, 0);
+      const totalItemDiscounts = editingSale.items.reduce((s: number, i: any) => s + (i.itemDiscount || 0), 0);
+      const subtotalAfterItem  = editingSale.items.reduce((s: number, i: any) => s + i.total, 0);
+      const orderDiscountAmt   = subtotalAfterItem * ((editingSale.orderDiscountPct || 0) / 100);
+      const grandTotal         = Math.max(0, subtotalAfterItem - orderDiscountAmt);
+      const amountPaid         = Math.min(editingSale.amountPaid ?? grandTotal, grandTotal);
+      const pendingAmount      = Math.max(0, grandTotal - amountPaid);
+
+      await updateDoc(doc(db, 'sales', editingSale.id), {
+        items: editingSale.items,
+        grossSubtotal, totalItemDiscounts,
+        subtotal: subtotalAfterItem,
+        orderDiscount: orderDiscountAmt,
+        discount: orderDiscountAmt + totalItemDiscounts,
+        total: grandTotal,
+        amountPaid,
+        pendingAmount,
+        customerName: editingSale.customerName,
+        customerPhone: editingSale.customerPhone,
+        customerType: editingSale.customerType,
+        lastEditedAt: new Date().toISOString(),
+      });
+      setEditingSale(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'sales');
+    } finally {
+      setEditSaving(false);
+    }
+  };
 
   const handlePrint = () => {
     if (window !== window.top) { setShowPrintAlert(true); setTimeout(() => setShowPrintAlert(false), 5000); }
@@ -396,10 +434,16 @@ export function SalesHistory() {
                   {sale.discount > 0
                     ? <p className="text-xs text-red-500">Discount: -{formatCurrency(sale.discount)}</p>
                     : <span />}
-                  <button onClick={() => setSelectedSale(sale)}
-                    className="flex items-center gap-1 text-blue-600 text-xs font-medium">
-                    <Eye className="w-3.5 h-3.5" /> View
-                  </button>
+                  <div className="flex gap-2">
+                    <button onClick={() => setSelectedSale(sale)}
+                      className="flex items-center gap-1 text-blue-600 text-xs font-medium">
+                      <Eye className="w-3.5 h-3.5" /> View
+                    </button>
+                    <button onClick={() => setEditingSale({ ...sale, orderDiscountPct: sale.subtotal > 0 ? Math.round((sale.orderDiscount || 0) / sale.subtotal * 100) : 0 })}
+                      className="flex items-center gap-1 text-orange-600 text-xs font-medium">
+                      <Edit2 className="w-3.5 h-3.5" /> Edit
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
@@ -443,10 +487,15 @@ export function SalesHistory() {
                       <td className="p-4 text-gray-600">{formatCurrency(getGross(sale))}</td>
                       <td className="p-4 text-red-600">{sale.discount > 0 ? `-${formatCurrency(sale.discount)}` : '—'}</td>
                       <td className="p-4 font-bold text-gray-900">{formatCurrency(sale.total)}</td>
-                      <td className="p-4 flex justify-end">
-                        <button onClick={() => setSelectedSale(sale)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded flex items-center gap-1 text-sm font-medium">
-                          <Eye className="w-4 h-4" /> View
-                        </button>
+                      <td className="p-4">
+                        <div className="flex justify-end gap-1">
+                          <button onClick={() => setSelectedSale(sale)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded flex items-center gap-1 text-sm font-medium">
+                            <Eye className="w-4 h-4" /> View
+                          </button>
+                          <button onClick={() => setEditingSale({ ...sale, orderDiscountPct: sale.subtotal > 0 ? Math.round((sale.orderDiscount || 0) / sale.subtotal * 100) : 0 })} className="p-1.5 text-orange-600 hover:bg-orange-50 rounded flex items-center gap-1 text-sm font-medium">
+                            <Edit2 className="w-4 h-4" /> Edit
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -654,6 +703,159 @@ export function SalesHistory() {
                 <button onClick={() => setShowExportModal(false)} className="flex-1 px-4 py-2.5 border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 text-sm font-medium">Cancel</button>
                 <button onClick={doExport} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium">
                   <Download className="w-4 h-4" /> Download CSV
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Edit Sale Modal ── */}
+        {editingSale && (
+          <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
+            <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:max-w-2xl overflow-hidden flex flex-col max-h-[95vh]">
+              <div className="p-4 md:p-5 border-b border-gray-100 flex justify-between items-start bg-orange-50 shrink-0">
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">Edit Sale</h2>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {editingSale.date ? format(new Date(editingSale.date), 'MMM dd, yyyy HH:mm') : 'N/A'} • <span className="font-mono">{editingSale.id.slice(0,10)}…</span>
+                  </p>
+                </div>
+                <button onClick={() => setEditingSale(null)} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full"><X className="w-5 h-5" /></button>
+              </div>
+
+              <div className="overflow-y-auto flex-1 p-4 space-y-4">
+
+                {/* Customer info */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Customer Name</label>
+                    <input type="text" value={editingSale.customerName || ''} placeholder="—"
+                      onChange={e => setEditingSale((s: any) => ({ ...s, customerName: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Phone</label>
+                    <input type="text" value={editingSale.customerPhone || ''} placeholder="—"
+                      onChange={e => setEditingSale((s: any) => ({ ...s, customerPhone: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                  </div>
+                </div>
+
+                {/* Sale type */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Sale Type</label>
+                  <div className="flex bg-gray-100 rounded-lg p-1 gap-1 w-fit">
+                    {(['customer', 'hospital'] as const).map(t => (
+                      <button key={t} onClick={() => setEditingSale((s: any) => ({ ...s, customerType: t }))}
+                        className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${editingSale.customerType === t ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                        {t.charAt(0).toUpperCase() + t.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Items */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-2">Items</label>
+                  <div className="space-y-2">
+                    {editingSale.items?.map((item: any, idx: number) => (
+                      <div key={idx} className="border border-gray-100 rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-medium text-sm text-gray-900 flex-1">{item.name}
+                            <span className={`ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${item.sellType === 'box' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>{item.sellType}</span>
+                          </p>
+                          <button onClick={() => setEditingSale((s: any) => ({ ...s, items: s.items.filter((_: any, i: number) => i !== idx) }))}
+                            className="p-1 text-red-400 hover:bg-red-50 rounded shrink-0"><X className="w-3.5 h-3.5" /></button>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <div>
+                            <label className="block text-[10px] text-gray-400 mb-0.5">Qty</label>
+                            <input type="number" min="1" value={item.quantity}
+                              onChange={e => setEditingSale((s: any) => ({
+                                ...s, items: s.items.map((it: any, i: number) => {
+                                  if (i !== idx) return it;
+                                  const q = parseInt(e.target.value) || 1;
+                                  const disc = it.itemDiscount || 0;
+                                  return { ...it, quantity: q, total: Math.max(0, q * it.price - disc) };
+                                })
+                              }))}
+                              className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-orange-400" />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-gray-400 mb-0.5">Unit Price</label>
+                            <input type="number" min="0" step="0.01" value={item.price}
+                              onChange={e => setEditingSale((s: any) => ({
+                                ...s, items: s.items.map((it: any, i: number) => {
+                                  if (i !== idx) return it;
+                                  const p = parseFloat(e.target.value) || 0;
+                                  const disc = it.itemDiscount || 0;
+                                  return { ...it, price: p, total: Math.max(0, it.quantity * p - disc) };
+                                })
+                              }))}
+                              className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-orange-400" />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-gray-400 mb-0.5">Item Disc Rs.</label>
+                            <input type="number" min="0" step="0.01" value={item.itemDiscount || 0}
+                              onChange={e => setEditingSale((s: any) => ({
+                                ...s, items: s.items.map((it: any, i: number) => {
+                                  if (i !== idx) return it;
+                                  const d = parseFloat(e.target.value) || 0;
+                                  return { ...it, itemDiscount: d, total: Math.max(0, it.quantity * it.price - d) };
+                                })
+                              }))}
+                              className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-orange-400" />
+                          </div>
+                        </div>
+                        <div className="flex justify-end text-xs text-gray-500">Line total: <span className="font-bold text-gray-800 ml-1">{formatCurrency(item.total)}</span></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Order discount & payment */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Order Discount %</label>
+                    <input type="number" min="0" max="100" value={editingSale.orderDiscountPct || 0}
+                      onChange={e => setEditingSale((s: any) => ({ ...s, orderDiscountPct: parseFloat(e.target.value) || 0 }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Amount Paid</label>
+                    <input type="number" min="0" step="0.01" value={editingSale.amountPaid ?? ''}
+                      onChange={e => setEditingSale((s: any) => ({ ...s, amountPaid: parseFloat(e.target.value) || 0 }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                  </div>
+                </div>
+
+                {/* Live totals preview */}
+                {(() => {
+                  const sub   = (editingSale.items || []).reduce((s: number, i: any) => s + i.total, 0);
+                  const gross = (editingSale.items || []).reduce((s: number, i: any) => s + i.quantity * i.price, 0);
+                  const odAmt = sub * ((editingSale.orderDiscountPct || 0) / 100);
+                  const total = Math.max(0, sub - odAmt);
+                  const paid  = Math.min(editingSale.amountPaid ?? total, total);
+                  const pend  = Math.max(0, total - paid);
+                  return (
+                    <div className="bg-orange-50 border border-orange-100 rounded-lg p-3 space-y-1 text-sm">
+                      <div className="flex justify-between text-gray-600"><span>Gross Subtotal</span><span>{formatCurrency(gross)}</span></div>
+                      {gross !== sub && <div className="flex justify-between text-orange-600"><span>Item Discounts</span><span>-{formatCurrency(gross - sub)}</span></div>}
+                      {odAmt > 0 && <div className="flex justify-between text-red-500"><span>Order Discount ({editingSale.orderDiscountPct}%)</span><span>-{formatCurrency(odAmt)}</span></div>}
+                      <div className="flex justify-between font-bold text-gray-900 border-t border-orange-200 pt-1 mt-1"><span>New Total</span><span className="text-orange-700">{formatCurrency(total)}</span></div>
+                      {pend > 0 && <div className="flex justify-between font-bold text-red-600"><span>Pending</span><span>{formatCurrency(pend)}</span></div>}
+                      {pend === 0 && <div className="text-xs text-green-700 bg-green-50 px-2 py-1 rounded">✓ Fully Paid</div>}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              <div className="p-4 border-t border-gray-100 bg-gray-50 shrink-0 flex gap-3">
+                <button onClick={() => setEditingSale(null)} className="flex-1 py-2.5 border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-100 font-medium text-sm">Cancel</button>
+                <button onClick={handleSaveEdit} disabled={editSaving}
+                  className="flex-1 py-2.5 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 font-medium text-sm flex items-center justify-center gap-2">
+                  <Save className="w-4 h-4" />
+                  {editSaving ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
             </div>
